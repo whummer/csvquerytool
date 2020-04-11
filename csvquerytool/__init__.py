@@ -14,14 +14,16 @@ GUESS_TYPE_FROM_N_ROWS = 10000
 ROW_PADDING_STRING = '' # if a row is truncated, missing cells will be filled in with this string
 
 # TODO: sqlite only natively supports the types TEXT, INTEGER, FLOAT, BLOB and NULL.
-# Support for extra types, such as datetimes, can be added with the detect_types 
+# Support for extra types, such as datetimes, can be added with the detect_types
 # parameter and by registering custom converters with register_converter().
-stripped_string = lambda s: s.strip('%$?').replace(',', '')
+def stripped_string(s):
+    return s.strip('%$?').replace(',', '')
+
 CAST_FUNCS = [
     (lambda s: int(stripped_string(s)) if stripped_string(s) != '' else None, 'INTEGER'),
     (lambda s: float(stripped_string(s)) if stripped_string(s) != '' else None, 'FLOAT'),
-    (lambda s: unicode(s.decode(DEFAULT_ENCODING)), 'TEXT'),
-    (lambda s: bytes(s), 'BLOB'),
+    (lambda s: s.decode(DEFAULT_ENCODING), 'TEXT'),
+    (lambda s: bytes(s, DEFAULT_ENCODING), 'BLOB')
 ]
 
 FORMAT_FUNCS = {
@@ -38,12 +40,12 @@ def sqlite_dict_factory(cursor, row):
 def guess_type(example_data):
     for cast_func, cast_type in CAST_FUNCS:
         try:
-            map(cast_func, example_data)
+            list(map(cast_func, example_data))
         except:
             continue
         else:
             return (cast_func, cast_type)
-    raise ValueError, "could not guess data type from example data: %r" % example_data
+    raise ValueError("could not guess data type from example data: %r" % example_data)
 
 def rename_duplicates(header):
     for col_num in range(len(header)):
@@ -61,11 +63,11 @@ def create_table(csv_file, db_cursor, table_name='csv', pad_rows=True):
 
     with open(csv_file) as csv_fh:
         reader = csv.reader(csv_fh)
-        header = [col.strip() for col in reader.next()]
+        header = [col.strip() for col in next(reader)]
         if AUTO_RENAME_DUPLICATE_COLUMN_NAMES:
             header = rename_duplicates(header)
         elif len(header) != len(set(header)):
-            raise ValueError, "CSV file contains duplicate column names"
+            raise ValueError("CSV file contains duplicate column names")
 
         # guess the types of each column (by sniffing the first GUESS_TYPE_FROM_N_ROWS rows)
         detect_type_rows = list(itertools.islice(reader, GUESS_TYPE_FROM_N_ROWS))
@@ -77,7 +79,7 @@ def create_table(csv_file, db_cursor, table_name='csv', pad_rows=True):
                 try:
                     example_data = [row[col_num].strip() for row in detect_type_rows]
                 except IndexError:
-                    raise ValueError, 'header and data row have different number of columns'
+                    raise ValueError('header and data row have different number of columns')
             cast_func, cast_type = guess_type(example_data)
             guessed_type[col_name] = cast_func
         _logger.info("guessed row types: %r", dict((k, dict(CAST_FUNCS)[v]) for k, v in guessed_type.items()))
@@ -102,20 +104,19 @@ def create_table(csv_file, db_cursor, table_name='csv', pad_rows=True):
                 padding = [ROW_PADDING_STRING,] * max(0, len(header) - len(row))
                 row += padding
             elif len(row) != len(header):
-                raise ValueError, 'header and data row have different number of columns'
+                raise ValueError('header and data row have different number of columns')
             sql = "INSERT INTO " + table_name + " VALUES (" + ','.join('?' for _ in row) + ")"
             try:
                 data = [guessed_type[col_name](val.strip()) for col_name, val in zip(header, row)]
-            except ValueError, ex:
+            except ValueError as ex:
                 if hasattr(ex, 'encoding'):
-                    raise ValueError, "not a valid '%s' sequence: %r" % (ex.encoding, ex.object)
+                    raise ValueError("not a valid '%s' sequence: %r" % (ex.encoding, ex.object))
                 else:
-                    raise ValueError, "failed to convert row to guessed type, try increasing GUESS_TYPE_FROM_N_ROWS to improve guesses: %s" % ex
+                    raise ValueError("failed to convert row to guessed type, try increasing GUESS_TYPE_FROM_N_ROWS to improve guesses: %s" % ex)
             # TODO: this could probably be sped up with db_cursor.executemany()
             try:
                 db_cursor.execute(sql, data)
             except:
-                print "error inserting: %r" % data
                 raise
             if num_rows > 0 and num_rows % 100000 == 0:
                 _logger.info("loaded %.2f%% of csv file", 100.0 * csv_fh.tell() / file_size)
@@ -192,7 +193,7 @@ class SQLConsole(cmd.Cmd):
             return
         try:
             self.db_cur.execute(query)
-        except sqlite3.OperationalError, e:
+        except sqlite3.OperationalError as e:
             print >> sys.stderr, e
             return
         header = [col[0] for col in self.db_cur.description]
@@ -217,6 +218,6 @@ def interactive_console(csv_files):
     table_names = choose_table_names(csv_files, based_on_filename=True)
     for csv_file, table_name in zip(csv_files, table_names):
         create_table(csv_file, db_cur, table_name)
-        print "* file '%s' loaded into table '%s'" % (csv_file, table_name)
+        print("* file '%s' loaded into table '%s'" % (csv_file, table_name))
     console = SQLConsole(db_cur)
     console.cmdloop("SQL Interactive Console")
